@@ -90,6 +90,6 @@ if st.button("Generate", type="primary", disabled=not text.strip()):
     st.success("Done!")
     st.audio(io.BytesIO(audio_bytes), format="audio/mp3")
     st.download_button("Download MP3", audio_bytes, file_name=fname, mime="audio/mpeg")
-    st.caption(f"Generated {len(audio_bytes)} bytes")
+    
 
 st.caption("Set OPENAI_API_KEY in Secrets (Streamlit Cloud) or as an environment variable.")
