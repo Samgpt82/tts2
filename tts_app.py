@@ -7,6 +7,46 @@ from typing import List
 import streamlit as st
 from openai import OpenAI
 
+# at top of file
+import io
+from openai import OpenAI
+import streamlit as st
+
+@st.cache_resource(show_spinner=False)
+def get_client():
+    # works with Streamlit Secrets or env var
+    key = os.environ.get("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
+    if not key:
+        st.error("Missing OPENAI_API_KEY")
+        st.stop()
+    return OpenAI(api_key=key)
+
+def _tts_once(client, model: str, voice: str, text: str) -> bytes:
+    """Call OpenAI Speech API, compatible with SDKs that use `format` or `response_format`."""
+    try:
+        # newer SDKs
+        r = client.audio.speech.create(model=model, voice=voice, input=text, format="mp3")
+    except TypeError:
+        # some SDKs use response_format instead
+        r = client.audio.speech.create(model=model, voice=voice, input=text, response_format="mp3")
+
+    # normalize to bytes across SDK variants
+    if hasattr(r, "content") and r.content is not None:
+        return r.content
+    if hasattr(r, "read"):
+        return r.read()
+    if isinstance(r, (bytes, bytearray)):
+        return bytes(r)
+    # last resort: try attribute commonly used for binary payloads
+    return getattr(r, "data", b"")
+
+def synthesize_tts(chunks, voice: str, model: str) -> bytes:
+    client = get_client()
+    out = io.BytesIO()
+    for chunk in chunks:
+        out.write(_tts_once(client, model, voice, chunk))
+    return out.getvalue()
+
 # -----------------------
 # Config
 # -----------------------
