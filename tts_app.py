@@ -1,6 +1,7 @@
 import io
 import os
 import uuid
+import base64
 from pathlib import Path
 from typing import List
 
@@ -22,12 +23,16 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 st.set_page_config(page_title="TTS", page_icon="🔊", layout="centered")
 st.title("🔊 Text to Speech")
 
+# -----------------------
+# Helpers
+# -----------------------
 def chunk_text(text: str, max_len: int = MAX_CHARS_PER_CHUNK) -> List[str]:
     chunks, buf = [], []
     length = 0
     for part in text.split():
         if length + len(part) + 1 > max_len:
-            chunks.append(" ".join(buf))
+            if buf:
+                chunks.append(" ".join(buf))
             buf, length = [part], len(part)
         else:
             buf.append(part)
@@ -38,23 +43,23 @@ def chunk_text(text: str, max_len: int = MAX_CHARS_PER_CHUNK) -> List[str]:
 
 @st.cache_resource(show_spinner=False)
 def get_client():
-    # works with Streamlit Secrets or env var
     key = os.environ.get("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY")
     if not key:
-        st.error("Missing OPENAI_API_KEY")
+        st.error("Missing OPENAI_API_KEY (set in Secrets or environment).")
         st.stop()
     return OpenAI(api_key=key)
 
 def _tts_once(client, model: str, voice: str, text: str) -> bytes:
-    """Call OpenAI Speech API, compatible with SDKs that use `format` or `response_format`."""
+    """
+    Call OpenAI Speech API. Supports SDKs that use `format` or `response_format`.
+    Returns raw MP3 bytes.
+    """
     try:
-        # newer SDKs
         r = client.audio.speech.create(model=model, voice=voice, input=text, format="mp3")
     except TypeError:
-        # some SDKs use response_format instead
         r = client.audio.speech.create(model=model, voice=voice, input=text, response_format="mp3")
 
-    # normalize to bytes across SDK variants
+    # Normalize to bytes across SDK variants
     if hasattr(r, "content") and r.content is not None:
         return r.content
     if hasattr(r, "read"):
@@ -70,6 +75,34 @@ def synthesize_tts(chunks, voice: str, model: str) -> bytes:
         out.write(_tts_once(client, model, voice, chunk))
     return out.getvalue()
 
+def render_audio(audio_bytes: bytes, file_name: str):
+    """
+    Primary player: Streamlit audio with proper MIME for iOS.
+    Fallback: raw HTML5 <audio> tag (more tolerant on mobile).
+    Always shows a download button.
+    """
+    ok = False
+    try:
+        # Safari expects standards-compliant MIME
+        st.audio(io.BytesIO(audio_bytes), format="audio/mpeg")
+        ok = True
+    except Exception as e:
+        st.caption(f"Player error: {e}")
+
+    if not ok:
+        b64 = base64.b64encode(audio_bytes).decode()
+        st.markdown(
+            f"""
+            <audio controls style="width:100%">
+              <source src="data:audio/mpeg;base64,{b64}" type="audio/mpeg">
+              Your browser does not support the audio element.
+            </audio>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.download_button("Download MP3", audio_bytes, file_name=file_name, mime="audio/mpeg")
+
 # -----------------------
 # UI
 # -----------------------
@@ -80,16 +113,23 @@ with col1:
 with col2:
     model = st.text_input("Model", value=DEFAULT_MODEL)
 
-if st.button("Generate", type="primary", disabled=not text.strip()):
-    with st.spinner("Synthesizing..."):
-        chunks = chunk_text(text)
-        audio_bytes = synthesize_tts(chunks, voice, model)
-        fname = f"{voice}-{uuid.uuid4().hex[:8]}.mp3"
-        (OUTPUT_DIR / fname).write_bytes(audio_bytes)
+gen = st.button("Generate", type="primary", disabled=not text.strip())
 
-    st.success("Done!")
-    st.audio(io.BytesIO(audio_bytes), format="audio/mp3")
-    st.download_button("Download MP3", audio_bytes, file_name=fname, mime="audio/mpeg")
-    
+if gen:
+    with st.spinner("Synthesizing..."):
+        try:
+            chunks = chunk_text(text)
+            audio_bytes = synthesize_tts(chunks, voice, model)
+            size = len(audio_bytes)
+            st.caption(f"Generated {size} bytes")
+            if size == 0:
+                st.error("No audio returned. Check API key, model name, or logs.")
+            else:
+                fname = f"{voice}-{uuid.uuid4().hex[:8]}.mp3"
+                (OUTPUT_DIR / fname).write_bytes(audio_bytes)
+                st.success("Done!")
+                render_audio(audio_bytes, fname)
+        except Exception as e:
+            st.error(f"Error while generating audio: {e}")
 
 st.caption("Set OPENAI_API_KEY in Secrets (Streamlit Cloud) or as an environment variable.")
