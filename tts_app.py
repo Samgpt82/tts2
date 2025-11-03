@@ -27,16 +27,18 @@ st.title("🔊 Text to Speech")
 # Helpers
 # -----------------------
 def chunk_text(text: str, max_len: int = MAX_CHARS_PER_CHUNK) -> List[str]:
+    """Split text into roughly max_len-sized chunks on whitespace."""
     chunks, buf = [], []
     length = 0
     for part in text.split():
-        if length + len(part) + 1 > max_len:
+        add_len = len(part) + (1 if buf else 0)
+        if length + add_len > max_len:
             if buf:
                 chunks.append(" ".join(buf))
             buf, length = [part], len(part)
         else:
             buf.append(part)
-            length += len(part) + 1
+            length += add_len
     if buf:
         chunks.append(" ".join(buf))
     return chunks
@@ -68,7 +70,7 @@ def _tts_once(client, model: str, voice: str, text: str) -> bytes:
         return bytes(r)
     return getattr(r, "data", b"")
 
-def synthesize_tts(chunks, voice: str, model: str) -> bytes:
+def synthesize_tts(chunks: List[str], voice: str, model: str) -> bytes:
     client = get_client()
     out = io.BytesIO()
     for chunk in chunks:
@@ -104,21 +106,33 @@ def render_audio(audio_bytes: bytes, file_name: str):
     st.download_button("Download MP3", audio_bytes, file_name=file_name, mime="audio/mpeg")
 
 # -----------------------
-# UI
+# Input Section (Text OR .txt file)
 # -----------------------
-text = st.text_area("Text", placeholder="Type or paste text to speak...", height=200)
+st.subheader("Input Text")
+uploaded_file = st.file_uploader("Upload a .txt file (optional)", type=["txt"])
+
+if uploaded_file is not None:
+    text = uploaded_file.read().decode("utf-8", errors="ignore")
+    st.success("✅ Text file loaded.")
+    st.text_area("Preview File Content", text, height=200)
+else:
+    text = st.text_area("Or enter text manually:", placeholder="Type or paste text here...", height=200)
+
+# Voice / Model selection
 col1, col2 = st.columns(2)
 with col1:
     voice = st.selectbox("Voice", ALLOWED_VOICES, index=0)
 with col2:
     model = st.text_input("Model", value=DEFAULT_MODEL)
 
+# Generate
 gen = st.button("Generate", type="primary", disabled=not text.strip())
 
 if gen:
     with st.spinner("Synthesizing..."):
         try:
             chunks = chunk_text(text)
+            st.caption(f"Chunked into {len(chunks)} piece(s)")
             audio_bytes = synthesize_tts(chunks, voice, model)
             size = len(audio_bytes)
             st.caption(f"Generated {size} bytes")
